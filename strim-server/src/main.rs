@@ -1,18 +1,17 @@
-// use eframe::egui;
 use anyhow::Result;
-
-// use capture::Capture;
-// use cli_commands::{ Cli };
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{SampleFormat, StreamConfig};
+use std::fmt::Debug;
 use std::time::Duration;
 use std::io::Write;
 use std::net::{TcpListener, TcpStream};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 
+use strim_shared::DEFAULT_PORT;
 
 mod cli_commands;
+mod capture;
 
 fn main() {
     let (tx, rx) = mpsc::channel::<Vec<u8>>();
@@ -47,8 +46,11 @@ fn start_default_input_capture(tx: mpsc::Sender<Vec<u8>>) -> Result<cpal::Stream
         .default_input_config()
         .map_err(|e| anyhow::anyhow!("Failed to get default input config: {e}"))?;
 
+    println!("Recording config: {:?}", &supported_config);
+
     let sample_format = supported_config.sample_format();
     let config: StreamConfig = supported_config.into();
+
 
     let err_fn = |err| eprintln!("an error occurred on stream: {err}");
 
@@ -103,17 +105,17 @@ fn on_input_data_u16(data: &[u16], tx: &mpsc::Sender<Vec<u8>>) {
 }
 
 fn accept_loop(clients: Arc<Mutex<Vec<TcpStream>>>) {
-    let listener = match TcpListener::bind(("0.0.0.0", 5555)) {
+    let listener = match TcpListener::bind(("0.0.0.0", DEFAULT_PORT)) {
         Ok(l) => l,
         Err(e) => {
             eprintln!("Failed to bind TCP listener: {e}");
             return;
         }
     };
-    println!("TCP server listening on 0.0.0.0:5555");
+    println!("TCP server listening on 0.0.0.0:{}", DEFAULT_PORT);
     for conn in listener.incoming() {
         match conn {
-            Ok(mut stream) => {
+            Ok(stream) => {
                 let _ = stream.set_nodelay(true);
                 println!("Client connected: {:?}", stream.peer_addr());
                 clients.lock().unwrap().push(stream);
@@ -138,32 +140,3 @@ fn broadcast_loop(rx: mpsc::Receiver<Vec<u8>>, clients: Arc<Mutex<Vec<TcpStream>
         }
     }
 }
-
-
-// struct Application {
-// }
-
-// impl Default for Application {
-//     fn default() -> Self {
-//         Self {}
-//     }
-// }
-
-// impl eframe::App for Application {
-//     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-//         egui::CentralPanel::default().show(ctx, |ui| {
-//             // ui.label("Hello World!");
-//         });
-//     }   
-// }
-
-//// GUI main
-// fn main() -> eframe::Result<()> {
-//     eframe::run_native(
-//         "Strim",
-//         eframe::NativeOptions::default(),
-//         Box::new(|_cc| {
-//             Ok(Box::<Application>::default())
-//         }),
-//     )
-// }

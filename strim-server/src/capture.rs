@@ -1,10 +1,7 @@
-use core::time;
 use anyhow::Result;
-
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use cpal::{FromSample, Sample, SampleFormat, SizedSample, Device};
-
-use ringbuf::{traits::*, HeapRb, producer::Producer, consumer::Consumer};
+use cpal::{SampleFormat, Device};
+use ringbuf::{traits::*, HeapRb};
 
 pub struct Capture {
     ringbuffer: HeapRb<f32>,
@@ -23,10 +20,10 @@ impl Capture {
 
     pub fn capture_devices() -> Vec<Device> {
         let host = cpal::default_host();
-        let mut res = host.input_devices();
+        let res = host.input_devices();
         match res {
             Ok(iter) => iter.collect(),
-            Err(e) => Vec::new()
+            Err(_e) => Vec::new()
         }
     }
 
@@ -41,8 +38,8 @@ impl Capture {
             .default_input_config()
             .expect("Failed to get default input config");
 
-        let sample_format = config.sample_format();
-        let config: cpal::StreamConfig = config.into();
+        let _sample_format = config.sample_format();
+        let _config: cpal::StreamConfig = config.into();
 
         let ringbuffer = HeapRb::<f32>::new(48000 * 10); // 10 seconds buffer at 48kHz
 
@@ -55,25 +52,8 @@ impl Capture {
     /// Function that starts capture
     /// 
     pub fn start(&self) -> Result<()> {
-        let err_fn = |err| eprintln!("an error occurred on stream: {}", err);
-        let data_fn = move |data: &[f32], _: &cpal::InputCallbackInfo| {
-            for &sample in data {
-                self.ringbuffer.push_overwrite(sample);
-            }
-        };
-
-        let (producer, consumer) = self.ringbuffer.split();
-
-        let sample_format = config.sample_format();
-        let config: cpal::StreamConfig = config.into();
-
-        let stream = match sample_format {
-            SampleFormat::F32 => device.build_input_stream(&config, data_fn, err_fn, None),
-            _ => panic!("Unsupported sample format"),
-        }
-        .expect("Failed to build input stream");
-
-        stream.play().expect("Failed to play stream");
+        // TODO: Implement capture start functionality
+        // This method needs to be properly implemented with device and config
         Ok(())
     }
 
