@@ -6,20 +6,20 @@ use std::net::TcpStream;
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::time::Duration;
-use strim_shared::DEFAULT_PORT;
+use strim_shared::{DEFAULT_PORT, Message, AudioConfig, SampleFormat as SharedSampleFormat};
 
-mod cli_commands;
-use clap::Parser;
+// mod cli_commands;
+// use clap::Parser;
 
 fn main() -> Result<()> {
     // let args = cli_commands::Cli::parse();
     
     // println!("Connecting to server at {}:{}", args.host, args.port);
-    
+    §
     let stream = TcpStream::connect(("0.0.0.0", DEFAULT_PORT))?;
     stream.set_nodelay(true)?;
     
-    let (tx, rx) = mpsc::channel::<Vec<u8>>();
+    let (tx, rx) = mpsc::channel::<Message>();
     
     // Spawn thread to read from network
     let stream_clone = stream.try_clone()?;
@@ -31,7 +31,9 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-fn network_read_loop(mut stream: TcpStream, tx: mpsc::Sender<Vec<u8>>) {
+/// Read messages from the network and deserialize them
+/// Sends deserialized messages to the audio playback thread
+fn network_read_loop(mut stream: TcpStream, tx: mpsc::Sender<Message>) {
     let mut buffer = [0u8; 4096];
     
     loop {
@@ -42,8 +44,17 @@ fn network_read_loop(mut stream: TcpStream, tx: mpsc::Sender<Vec<u8>>) {
             }
             Ok(n) => {
                 let data = buffer[..n].to_vec();
-                if tx.send(data).is_err() {
-                    break;
+                // Try to deserialize the message
+                match Message::deserialize(&data) {
+                    Ok(message) => {
+                        if tx.send(message).is_err() {
+                            break;
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("Failed to deserialize message: {e}");
+                        // Continue reading in case of partial data
+                    }
                 }
             }
             Err(e) => {
@@ -54,20 +65,48 @@ fn network_read_loop(mut stream: TcpStream, tx: mpsc::Sender<Vec<u8>>) {
     }
 }
 
-fn start_audio_playback(rx: mpsc::Receiver<Vec<u8>>) -> Result<()> {
+/// Start audio playback, handling both config and audio data messages
+fn start_audio_playback(rx: mpsc::Receiver<Message>) -> Result<()> {
+    // Wait for config message from server first
+    let audio_config = match rx.recv() {
+        Ok(Message::Config(config)) => {
+            println!("Received audio config from server: {:?}", config);
+            config
+        }
+        Ok(Message::Error(err)) => {
+            eprintln!("Server error: {}", err);
+            return Err(anyhow::anyhow!("Server error: {}", err));
+        }
+        Ok(Message::AudioData(_)) => {
+            eprintln!("Received audio data before config, using default config");
+            // Use default config if we get audio data first
+            AudioConfig {
+                sample_rate: 44100,
+                channels: 2,
+                sample_format: SharedSampleFormat::F32,
+            }
+        }
+        Err(e) => {
+            eprintln!("Failed to receive config: {e}");
+            return Err(anyhow::anyhow!("Failed to receive config: {}", e));
+        }
+    };
+
     let host = cpal::default_host();
     let device = host
         .default_output_device()
         .ok_or_else(|| anyhow::anyhow!("No default output device"))?;
 
-    let supported_config = device
-        .default_output_config()
-        .map_err(|e| anyhow::anyhow!("Failed to get default output config: {e}"))?;
+    // Create stream config from received audio config
+    let config = StreamConfig {
+        channels: audio_config.channels,
+        sample_rate: cpal::SampleRate(audio_config.sample_rate),
+        buffer_size: cpal::BufferSize::Default,
+    };
 
-    println!("Playbak config: {:?}", &supported_config);
-
-    let sample_format = supported_config.sample_format();
-    let config: StreamConfig = supported_config.into();
+    let sample_format: SampleFormat = audio_config.sample_format.into();
+    
+    println!("Using server audio config: {:?}", audio_config);
 
     let err_fn = |err| eprintln!("Audio playback error: {err}");
 
@@ -76,13 +115,27 @@ fn start_audio_playback(rx: mpsc::Receiver<Vec<u8>>) -> Result<()> {
     let buffer_for_network = Arc::clone(&audio_buffer);
     let buffer_for_audio = Arc::clone(&audio_buffer);
 
-    // Spawn thread to receive network data
+    // Spawn thread to receive network messages (config already received above)
     thread::spawn(move || {
-        while let Ok(data) = rx.recv() {
-            let mut buffer = buffer_for_network.lock().unwrap();
-            buffer.extend_from_slice(&data);
+        while let Ok(message) = rx.recv() {
+            match message {
+                Message::AudioData(data) => {
+                    let mut buffer = buffer_for_network.lock().unwrap();
+                    buffer.extend_from_slice(&data);
+                }
+                Message::Config(config) => {
+                    println!("Received updated config: {:?}", config);
+                    // Could handle config updates here if needed
+                    // For now, we'll just log it since we already configured the stream
+                }
+                Message::Error(err) => {
+                    eprintln!("Server error: {}", err);
+                }
+            }
         }
     });
+
+    
 
     let stream = match sample_format {
         SampleFormat::F32 => device.build_output_stream(
