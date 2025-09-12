@@ -3,40 +3,52 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{SampleFormat, StreamConfig};
 use std::io::Read;
 use std::net::TcpStream;
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::{mpsc, Arc, Mutex, atomic::{AtomicBool, Ordering}};
 use std::thread;
 use std::time::Duration;
-use strim_shared::{DEFAULT_PORT, Message, AudioConfig, SampleFormat as SharedSampleFormat};
+use strim_shared::{Message, AudioConfig, SampleFormat as SharedSampleFormat};
 
-// mod cli_commands;
-// use clap::Parser;
+mod cli_commands;
+use clap::Parser;
 
 fn main() -> Result<()> {
-    // let args = cli_commands::Cli::parse();
+    let args = cli_commands::Cli::parse();
     
-    // println!("Connecting to server at {}:{}", args.host, args.port);
-    §
-    let stream = TcpStream::connect(("0.0.0.0", DEFAULT_PORT))?;
+    // Set up graceful shutdown handling
+    let running = Arc::new(AtomicBool::new(true));
+    let running_clone = Arc::clone(&running);
+    
+    ctrlc::set_handler(move || {
+        println!("\nReceived Ctrl+C, shutting down gracefully...");
+        running_clone.store(false, Ordering::SeqCst);
+    })?;
+    
+    println!("Connecting to server at {}:{}", args.host, args.port);
+    println!("Press Ctrl+C to disconnect gracefully");
+    
+    let stream = TcpStream::connect((args.host.as_str(), args.port))?;
     stream.set_nodelay(true)?;
     
     let (tx, rx) = mpsc::channel::<Message>();
     
     // Spawn thread to read from network
     let stream_clone = stream.try_clone()?;
-    thread::spawn(move || network_read_loop(stream_clone, tx));
+    let running_network = Arc::clone(&running);
+    thread::spawn(move || network_read_loop(stream_clone, tx, running_network));
     
     // Start audio playback
-    start_audio_playback(rx)?;
+    start_audio_playback(rx, running)?;
     
+    println!("Client disconnected");
     Ok(())
 }
 
 /// Read messages from the network and deserialize them
 /// Sends deserialized messages to the audio playback thread
-fn network_read_loop(mut stream: TcpStream, tx: mpsc::Sender<Message>) {
+fn network_read_loop(mut stream: TcpStream, tx: mpsc::Sender<Message>, running: Arc<AtomicBool>) {
     let mut buffer = [0u8; 4096];
     
-    loop {
+    while running.load(Ordering::SeqCst) {
         match stream.read(&mut buffer) {
             Ok(0) => {
                 println!("Server disconnected");
@@ -58,15 +70,20 @@ fn network_read_loop(mut stream: TcpStream, tx: mpsc::Sender<Message>) {
                 }
             }
             Err(e) => {
-                eprintln!("Network read error: {e}");
+                if running.load(Ordering::SeqCst) {
+                    eprintln!("Network read error: {e}");
+                }
                 break;
             }
         }
     }
+    
+    // Gracefully close the connection
+    let _ = stream.shutdown(std::net::Shutdown::Both);
 }
 
 /// Start audio playback, handling both config and audio data messages
-fn start_audio_playback(rx: mpsc::Receiver<Message>) -> Result<()> {
+fn start_audio_playback(rx: mpsc::Receiver<Message>, running: Arc<AtomicBool>) -> Result<()> {
     // Wait for config message from server first
     let audio_config = match rx.recv() {
         Ok(Message::Config(config)) => {
@@ -116,20 +133,29 @@ fn start_audio_playback(rx: mpsc::Receiver<Message>) -> Result<()> {
     let buffer_for_audio = Arc::clone(&audio_buffer);
 
     // Spawn thread to receive network messages (config already received above)
+    let running_audio = Arc::clone(&running);
     thread::spawn(move || {
-        while let Ok(message) = rx.recv() {
-            match message {
-                Message::AudioData(data) => {
-                    let mut buffer = buffer_for_network.lock().unwrap();
-                    buffer.extend_from_slice(&data);
+        while running_audio.load(Ordering::SeqCst) {
+            match rx.recv() {
+                Ok(message) => {
+                    match message {
+                        Message::AudioData(data) => {
+                            let mut buffer = buffer_for_network.lock().unwrap();
+                            buffer.extend_from_slice(&data);
+                        }
+                        Message::Config(config) => {
+                            println!("Received updated config: {:?}", config);
+                            // Could handle config updates here if needed
+                            // For now, we'll just log it since we already configured the stream
+                        }
+                        Message::Error(err) => {
+                            eprintln!("Server error: {}", err);
+                        }
+                    }
                 }
-                Message::Config(config) => {
-                    println!("Received updated config: {:?}", config);
-                    // Could handle config updates here if needed
-                    // For now, we'll just log it since we already configured the stream
-                }
-                Message::Error(err) => {
-                    eprintln!("Server error: {}", err);
+                Err(_) => {
+                    // Channel closed, exit gracefully
+                    break;
                 }
             }
         }
@@ -161,10 +187,16 @@ fn start_audio_playback(rx: mpsc::Receiver<Message>) -> Result<()> {
 
     stream.play()?;
     
-    // Keep the main thread alive
-    loop {
-        thread::sleep(Duration::from_secs(1));
+    // Keep the main thread alive until shutdown signal
+    while running.load(Ordering::SeqCst) {
+        thread::sleep(Duration::from_millis(100));
     }
+    
+    // Gracefully stop the audio stream
+    drop(stream);
+    println!("Audio playback stopped");
+    
+    Ok(())
 }
 
 fn on_output_data_f32(data: &mut [f32], buffer: &Arc<Mutex<Vec<u8>>>) {

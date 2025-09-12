@@ -4,7 +4,7 @@ use clap::Parser;
 #[derive(Parser)]
 #[command(name = "strim-client", version, about = "Audio streaming client")]
 pub struct Cli {
-    #[arg(short, long, default_value = "localhost")]
+    #[arg(long, default_value = "localhost")]
     pub host: String,
     
     #[arg(short, long, default_value = "8080")]

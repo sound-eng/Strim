@@ -13,3 +13,4 @@ cpal = { workspace = true }
 anyhow = { workspace = true }
 clap = { workspace = true }
 tokio = { workspace = true }
+ctrlc = { workspace = true }
