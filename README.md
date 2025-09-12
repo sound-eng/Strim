@@ -1,6 +1,6 @@
 # Strim
 
-## Strim is a pair of CLI applications - a client and a server - for capturing audio data and sending them over the network.
+## Strim is a pair of CLI applications - a client and a server - for capturing audio data and sending it over the network.
 
 ## Strim_server
 
