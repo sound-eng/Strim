@@ -19,6 +19,9 @@ fn main() {
     // Set up graceful shutdown handling
     let running = Arc::new(AtomicBool::new(true));
     let running_clone = Arc::clone(&running);
+
+    let ip_address = get_local_ip().unwrap_or_else(|| "unknown".parse().unwrap());
+    println!("Server IP address: {}", ip_address);
     
     ctrlc::set_handler(move || {
         println!("\nReceived Ctrl+C, shutting down server gracefully...");
@@ -161,6 +164,7 @@ fn on_input_data_f32(data: &[f32], tx: &mpsc::Sender<Message>) {
     for &s in data {
         out.extend_from_slice(&s.to_le_bytes());
     }
+    // println!("Captured {} samples", data.len());
     let _ = tx.send(Message::AudioData(out));
 }
 
@@ -336,4 +340,13 @@ fn health_check_loop(clients: Arc<Mutex<Vec<TcpStream>>>, running: Arc<AtomicBoo
     }
     
     println!("Health check loop stopped");
+}
+
+/// Retrieve the current local IP address of the machine
+fn get_local_ip() -> Option<std::net::IpAddr> {
+    // Connect to a public IP address (doesn't actually send data)
+    // This will use the default outbound interface
+    let udp_socket = std::net::UdpSocket::bind("0.0.0.0:0").ok()?;
+    udp_socket.connect("8.8.8.8:80").ok()?;
+    udp_socket.local_addr().ok().map(|addr| addr.ip())
 }
