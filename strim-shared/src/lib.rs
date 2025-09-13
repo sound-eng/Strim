@@ -59,16 +59,35 @@ pub enum Message {
 }
 
 impl Message {
-    /// Serialize a message to bytes for network transmission
-    /// Returns the serialized message as a byte vector
+    /// Serialize a message to bytes for network transmission with length prefix
+    /// Returns the serialized message as a byte vector with 4-byte length prefix
     pub fn serialize(&self) -> Result<Vec<u8>> {
-        bincode::serialize(self).map_err(|e| anyhow::anyhow!("Serialization failed: {}", e))
+        let data = bincode::serialize(self).map_err(|e| anyhow::anyhow!("Serialization failed: {}", e))?;
+        let mut result = Vec::with_capacity(4 + data.len());
+        result.extend_from_slice(&(data.len() as u32).to_le_bytes());
+        result.extend_from_slice(&data);
+        Ok(result)
     }
 
-    /// Deserialize bytes back into a Message
+    /// Deserialize bytes back into a Message from length-prefixed data
     /// Takes raw bytes from network and converts them to a Message
-    pub fn deserialize(data: &[u8]) -> Result<Self> {
-        bincode::deserialize(data).map_err(|e| anyhow::anyhow!("Deserialization failed: {}", e))
+    /// Returns (message, remaining_bytes) if successful
+    pub fn deserialize(data: &[u8]) -> Result<(Self, &[u8])> {
+        if data.len() < 4 {
+            return Err(anyhow::anyhow!("Not enough data for length prefix"));
+        }
+        
+        let length = u32::from_le_bytes([data[0], data[1], data[2], data[3]]) as usize;
+        
+        if data.len() < 4 + length {
+            return Err(anyhow::anyhow!("Not enough data for complete message"));
+        }
+        
+        let message_data = &data[4..4 + length];
+        let message = bincode::deserialize(message_data).map_err(|e| anyhow::anyhow!("Deserialization failed: {}", e))?;
+        let remaining = &data[4 + length..];
+        
+        Ok((message, remaining))
     }
 }
 
