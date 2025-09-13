@@ -10,7 +10,6 @@ use std::thread;
 use strim_shared::{Message, AudioConfig, SampleFormat as SharedSampleFormat};
 
 mod cli_commands;
-mod capture;
 use clap::Parser;
 
 fn main() {
@@ -19,6 +18,9 @@ fn main() {
     // Set up graceful shutdown handling
     let running = Arc::new(AtomicBool::new(true));
     let running_clone = Arc::clone(&running);
+    let running_accept = Arc::clone(&running);
+    let running_broadcast = Arc::clone(&running);
+    let running_health = Arc::clone(&running);
     
     ctrlc::set_handler(move || {
         println!("\nReceived Ctrl+C, shutting down server gracefully...");
@@ -31,6 +33,7 @@ fn main() {
     let clients_for_accept = Arc::clone(&clients);
     let clients_for_config = Arc::clone(&clients);
     let clients_for_shutdown = Arc::clone(&clients);
+    let clients_for_health = Arc::clone(&clients);
     
     // Get audio config first
     let audio_config = match get_audio_config() {
@@ -40,16 +43,14 @@ fn main() {
             return;
         }
     };
-
-    let running_accept = Arc::clone(&running);
-    thread::spawn(move || accept_loop(clients_for_accept, audio_config, args.port, running_accept));
     
-    let running_broadcast = Arc::clone(&running);
+    // Spawn a new clients accept thread
+    thread::spawn(move || accept_loop(clients_for_accept, audio_config, args.port, running_accept));
+
+    // Spawn a thread thet broadcasts recorded data to all clients
     thread::spawn(move || broadcast_loop(rx, clients_for_config, running_broadcast));
     
     // Spawn a health check thread to detect disconnected clients
-    let clients_for_health = Arc::clone(&clients);
-    let running_health = Arc::clone(&running);
     thread::spawn(move || health_check_loop(clients_for_health, running_health));
 
     let _stream = match start_default_input_capture(tx) {
@@ -60,7 +61,7 @@ fn main() {
         }
     };
 
-    println!("Server running. Press Ctrl+C to shutdown gracefully");
+    println!("Server running.");
     
     // Keep the main thread alive until shutdown signal
     while running.load(Ordering::SeqCst) {
