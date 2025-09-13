@@ -46,7 +46,8 @@ fn main() -> Result<()> {
 /// Read messages from the network and deserialize them
 /// Sends deserialized messages to the audio playback thread
 fn network_read_loop(mut stream: TcpStream, tx: mpsc::Sender<Message>, running: Arc<AtomicBool>) {
-    let mut buffer = [0u8; 2*4096];
+    // size 4096 and 2*4096 wasn't enough when connecting through wifi. consider increasing even more:
+    let mut buffer = [0u8; 4*4096]; 
     let mut message_buffer = Vec::new();
     
     while running.load(Ordering::SeqCst) {
@@ -56,6 +57,7 @@ fn network_read_loop(mut stream: TcpStream, tx: mpsc::Sender<Message>, running: 
                 break;
             }
             Ok(n) => {
+                println!("Got data: {n}");
                 // Add new data to our message buffer
                 message_buffer.extend_from_slice(&buffer[..n]);
                 
@@ -69,10 +71,10 @@ fn network_read_loop(mut stream: TcpStream, tx: mpsc::Sender<Message>, running: 
                             }
                             // Update buffer to remaining data
                             message_buffer = remaining.to_vec();
-                            println!("Got message: {n}");
+                            println!(" >> Got Message, remaining: {}", &message_buffer.len());
                         }
                         Err(_) => {
-                            println!("Partial data: {n}");
+                            println!(" >> Partial data: {}", &message_buffer.len());
                             // Not enough data for a complete message, wait for more
                             break;
                         }
