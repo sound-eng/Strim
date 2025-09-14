@@ -96,7 +96,7 @@ fn main() -> Result<()> {
     let mut audio_rx = audio_rx;
     
     while running.load(Ordering::SeqCst) {
-        match connection_rx.recv() {
+        match connection_rx.recv_timeout(Duration::from_millis(200)) {
             Ok(ConnectionEvent::Connected(stream)) => {
                 println!("Connection established, starting audio playback");
                 current_stream = Some(stream);
