@@ -2,6 +2,9 @@
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
+mod audiosample;
+
+pub use audiosample::AudioSample;
 
 /// Audio stream configuration sent from server to client
 /// Contains all the information needed to properly decode audio data

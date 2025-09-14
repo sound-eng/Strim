@@ -6,9 +6,10 @@ use std::net::TcpStream;
 use std::sync::{mpsc, Arc, Mutex, atomic::{AtomicBool, Ordering}};
 use std::thread;
 use std::time::Duration;
-use strim_shared::{Message, AudioConfig, SampleFormat as SharedSampleFormat};
+use strim_shared::{Message, AudioConfig, SampleFormat as SharedSampleFormat, AudioSample};
 
 mod cli_commands;
+
 use clap::Parser;
 
 fn main() -> Result<()> {
@@ -71,10 +72,10 @@ fn network_read_loop(mut stream: TcpStream, tx: mpsc::Sender<Message>, running: 
                             }
                             // Update buffer to remaining data
                             message_buffer = remaining.to_vec();
-                            println!(" >> Got Message, remaining: {}", &message_buffer.len());
+                            // println!(" >> Got Message, remaining: {}", &message_buffer.len());
                         }
                         Err(_) => {
-                            println!(" >> Partial data: {}", &message_buffer.len());
+                            // println!(" >> Partial data: {}", &message_buffer.len());
                             // Not enough data for a complete message, wait for more
                             break;
                         }
@@ -178,25 +179,25 @@ fn start_audio_playback(rx: mpsc::Receiver<Message>, running: Arc<AtomicBool>) -
     let stream = match shared_sample_format {
         SharedSampleFormat::F32 => device.build_output_stream(
             &config,
-            move |data: &mut [f32], _| on_output_data_f32(data, &buffer_for_audio),
+            move |data: &mut [f32], _| on_output_data(data, &buffer_for_audio),
             err_fn,
             None,
         )?,
         SharedSampleFormat::I16 => device.build_output_stream(
             &config,
-            move |data: &mut [i16], _| on_output_data_i16(data, &buffer_for_audio),
+            move |data: &mut [i16], _| on_output_data(data, &buffer_for_audio),
             err_fn,
             None,
         )?,
         SharedSampleFormat::U16 => device.build_output_stream(
             &config,
-            move |data: &mut [u16], _| on_output_data_u16(data, &buffer_for_audio),
+            move |data: &mut [u16], _| on_output_data(data, &buffer_for_audio),
             err_fn,
             None,
         )?,
         SharedSampleFormat::I32 => device.build_output_stream(
             &config,
-            move |data: &mut [i32], _| on_output_data_i32(data, &buffer_for_audio),
+            move |data: &mut [i32], _| on_output_data(data, &buffer_for_audio),
             err_fn, 
             None
         )?,
@@ -217,80 +218,25 @@ fn start_audio_playback(rx: mpsc::Receiver<Message>, running: Arc<AtomicBool>) -
     Ok(())
 }
 
-fn on_output_data_f32(data: &mut [f32], buffer: &Arc<Mutex<Vec<u8>>>) {
+
+// Mark: Output callback
+
+fn on_output_data<T: AudioSample>(data: &mut [T], buffer: &Arc<Mutex<Vec<u8>>>) {
     let mut audio_buffer = buffer.lock().unwrap();
-    let bytes_needed = data.len() * 4;
+    let bytes_needed = data.len() * T::BYTE_SIZE;
     
     if audio_buffer.len() < bytes_needed {
         // Not enough data, fill with silence
-        data.fill(0.0);
-        return;
-    }
-    
-    // Since we know we have exactly the right amount of data,
-    // we can safely convert without bounds checking each access
-    for (i, chunk) in audio_buffer[..bytes_needed].chunks_exact(4).enumerate() {
-        debug_assert!(i < data.len(), "Chunk index {} exceeds data length {}", i, data.len());
-        debug_assert_eq!(chunk.len(), 4, "Chunk has {} bytes instead of 4", chunk.len());
-
-        data[i] = f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
-    }
-    
-    // Remove processed bytes
-    audio_buffer.drain(..bytes_needed);
-}
-
-fn on_output_data_i16(data: &mut [i16], buffer: &Arc<Mutex<Vec<u8>>>) {
-    let mut audio_buffer = buffer.lock().unwrap();
-    let bytes_needed = data.len() * 2;
-    
-    if audio_buffer.len() < bytes_needed {
-        // Not enough data, fill with silence
-        data.fill(0);
-        return;
-    }
-    
-    // Convert bytes to i16 samples
-    for (i, sample_bytes) in audio_buffer[..bytes_needed].chunks(2).enumerate() {
-        data[i] = i16::from_le_bytes([sample_bytes[0], sample_bytes[1]]);
-    }
-    
-    // Remove processed bytes
-    audio_buffer.drain(..bytes_needed);
-}
-
-fn on_output_data_i32(data: &mut [i32], buffer: &Arc<Mutex<Vec<u8>>>) {
-    let mut audio_buffer = buffer.lock().unwrap();
-    let bytes_needed = data.len() * 4;
-    
-    if audio_buffer.len() < bytes_needed {
-        // Not enough data, fill with silence
-        data.fill(0);
-        return;
-    }
-    
-    // Convert bytes to i16 samples
-    for (i, sample_bytes) in audio_buffer[..bytes_needed].chunks(4).enumerate() {
-        data[i] = i32::from_le_bytes([sample_bytes[0], sample_bytes[1], sample_bytes[2], sample_bytes[3]]);
-    }
-    
-    // Remove processed bytes
-    audio_buffer.drain(..bytes_needed);
-}
-
-fn on_output_data_u16(data: &mut [u16], buffer: &Arc<Mutex<Vec<u8>>>) {
-    let mut audio_buffer = buffer.lock().unwrap();
-    let bytes_needed = data.len() * 2;
-    
-    if audio_buffer.len() < bytes_needed {
-        // Not enough data, fill with silence
-        data.fill(0);
+        data.fill(T::default());
         return;
     }
     
     // Convert bytes to u16 samples
-    for (i, sample_bytes) in audio_buffer[..bytes_needed].chunks(2).enumerate() {
-        data[i] = u16::from_le_bytes([sample_bytes[0], sample_bytes[1]]);
+    for (i, sample_bytes) in audio_buffer[..bytes_needed].chunks(T::BYTE_SIZE).enumerate() {
+        debug_assert!(i < data.len(), "Chunk index {} exceeds data length {}", i, data.len());
+        debug_assert_eq!(sample_bytes.len(), T::BYTE_SIZE, "Chunk has {} bytes instead of 4", sample_bytes.len());
+
+        data[i] = T::from_le_bytes(sample_bytes);
     }
 
     // Remove processed bytes

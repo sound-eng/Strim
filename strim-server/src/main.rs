@@ -7,7 +7,7 @@ use std::net::{TcpListener, TcpStream};
 use std::sync::{mpsc, Arc, Mutex, atomic::{AtomicBool, Ordering}};
 use std::thread;
 
-use strim_shared::{Message, AudioConfig, SampleFormat as SharedSampleFormat};
+use strim_shared::{AudioConfig, AudioSample, Message, SampleFormat as SharedSampleFormat};
 
 mod cli_commands;
 use clap::Parser;
@@ -139,25 +139,25 @@ fn start_default_input_capture(tx: mpsc::Sender<Message>) -> Result<cpal::Stream
     let stream = match sample_format {
         SampleFormat::F32 => device.build_input_stream(
             &config,
-            move |data: &[f32], _| on_input_data_f32(data, &tx),
+            move |data: &[f32], _| on_input_data(data, &tx),
             err_fn,
             None,
         )?,
         SampleFormat::I16 => device.build_input_stream(
             &config,
-            move |data: &[i16], _| on_input_data_i16(data, &tx),
+            move |data: &[i16], _| on_input_data(data, &tx),
             err_fn,
             None,
         )?,
         SampleFormat::U16 => device.build_input_stream(
             &config,
-            move |data: &[u16], _| on_input_data_u16(data, &tx),
+            move |data: &[u16], _| on_input_data(data, &tx),
             err_fn,
             None,
         )?,
         SampleFormat::I32 => device.build_input_stream(
             &config, 
-            move |data: &[i32], _| on_input_data_i32(data, &tx), 
+            move |data: &[i32], _| on_input_data(data, &tx), 
             err_fn, 
             None
         )?,
@@ -201,6 +201,14 @@ fn on_input_data_u16(data: &[u16], tx: &mpsc::Sender<Message>) {
     let mut out = Vec::with_capacity(data.len() * 2);
     for &s in data {
         out.extend_from_slice(&s.to_le_bytes());
+    }
+    let _ = tx.send(Message::AudioData(out));
+}
+
+fn on_input_data<T: AudioSample>(data: &[T], tx: &mpsc::Sender<Message>) {
+    let mut out = Vec::with_capacity(data.len() * T::BYTE_SIZE);
+    for &s in data {
+        out.extend_from_slice(&s.to_le_bytes().as_ref());
     }
     let _ = tx.send(Message::AudioData(out));
 }
