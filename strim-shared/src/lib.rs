@@ -24,15 +24,21 @@ pub enum SampleFormat {
     I32,
     /// 32-bit floating point samples
     F32,
+    /// 16-bit unsigned integer samples
+    U16,
 }
 
-impl From<cpal::SampleFormat> for SampleFormat {
-    fn from(format: cpal::SampleFormat) -> Self {
+impl TryFrom<cpal::SampleFormat> for SampleFormat {
+    
+    type Error = anyhow::Error;
+
+    fn try_from(format: cpal::SampleFormat) -> Result<Self> {
         match format {
-            cpal::SampleFormat::I16 => SampleFormat::I16,
-            cpal::SampleFormat::I32 => SampleFormat::I32,
-            cpal::SampleFormat::F32 => SampleFormat::F32,
-            _ => SampleFormat::F32, // Default fallback
+            cpal::SampleFormat::I16 => Ok(SampleFormat::I16),
+            cpal::SampleFormat::I32 => Ok(SampleFormat::I32),
+            cpal::SampleFormat::F32 => Ok(SampleFormat::F32),
+            cpal::SampleFormat::U16 => Ok(SampleFormat::U16),
+            _ => Err(anyhow::anyhow!("Unsupported sample format")),
         }
     }
 }
@@ -43,6 +49,7 @@ impl From<SampleFormat> for cpal::SampleFormat {
             SampleFormat::I16 => cpal::SampleFormat::I16,
             SampleFormat::I32 => cpal::SampleFormat::I32,
             SampleFormat::F32 => cpal::SampleFormat::F32,
+            SampleFormat::U16 => cpal::SampleFormat::U16
         }
     }
 }

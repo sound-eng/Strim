@@ -173,26 +173,28 @@ fn start_audio_playback(rx: mpsc::Receiver<Message>, running: Arc<AtomicBool>) -
         }
     });
 
-    let stream = match sample_format {
-        SampleFormat::F32 => device.build_output_stream(
+    let shared_sample_format = SharedSampleFormat::try_from(sample_format)?;
+
+    let stream = match shared_sample_format {
+        SharedSampleFormat::F32 => device.build_output_stream(
             &config,
             move |data: &mut [f32], _| on_output_data_f32(data, &buffer_for_audio),
             err_fn,
             None,
         )?,
-        SampleFormat::I16 => device.build_output_stream(
+        SharedSampleFormat::I16 => device.build_output_stream(
             &config,
             move |data: &mut [i16], _| on_output_data_i16(data, &buffer_for_audio),
             err_fn,
             None,
         )?,
-        SampleFormat::U16 => device.build_output_stream(
+        SharedSampleFormat::U16 => device.build_output_stream(
             &config,
             move |data: &mut [u16], _| on_output_data_u16(data, &buffer_for_audio),
             err_fn,
             None,
         )?,
-        SampleFormat::I32 => device.build_output_stream(
+        SharedSampleFormat::I32 => device.build_output_stream(
             &config,
             move |data: &mut [i32], _| on_output_data_i32(data, &buffer_for_audio),
             err_fn, 

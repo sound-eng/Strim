@@ -110,10 +110,12 @@ fn get_audio_config() -> Result<AudioConfig> {
     let sample_format = supported_config.sample_format();
     let config: StreamConfig = supported_config.into();
 
+    let shared_sample_format = SharedSampleFormat::try_from(sample_format)?;
+
     Ok(AudioConfig {
         sample_rate: config.sample_rate.0,
         channels: config.channels,
-        sample_format: SharedSampleFormat::from(sample_format),
+        sample_format: shared_sample_format,
     })
 }
 
