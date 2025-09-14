@@ -173,8 +173,6 @@ fn start_audio_playback(rx: mpsc::Receiver<Message>, running: Arc<AtomicBool>) -
         }
     });
 
-    
-
     let stream = match sample_format {
         SampleFormat::F32 => device.build_output_stream(
             &config,
@@ -193,6 +191,12 @@ fn start_audio_playback(rx: mpsc::Receiver<Message>, running: Arc<AtomicBool>) -
             move |data: &mut [u16], _| on_output_data_u16(data, &buffer_for_audio),
             err_fn,
             None,
+        )?,
+        SampleFormat::I32 => device.build_output_stream(
+            &config,
+            move |data: &mut [i32], _| on_output_data_i32(data, &buffer_for_audio),
+            err_fn, 
+            None
         )?,
         _ => anyhow::bail!("Unsupported sample format"),
     };
@@ -221,12 +225,17 @@ fn on_output_data_f32(data: &mut [f32], buffer: &Arc<Mutex<Vec<u8>>>) {
         return;
     }
     
-    // Convert bytes to f32 samples
-    for (i, sample_bytes) in audio_buffer.drain(..bytes_needed).collect::<Vec<_>>().chunks(4).enumerate() {
-        if i < data.len() {
-            data[i] = f32::from_le_bytes([sample_bytes[0], sample_bytes[1], sample_bytes[2], sample_bytes[3]]);
-        }
+    // Since we know we have exactly the right amount of data,
+    // we can safely convert without bounds checking each access
+    for (i, chunk) in audio_buffer[..bytes_needed].chunks_exact(4).enumerate() {
+        debug_assert!(i < data.len(), "Chunk index {} exceeds data length {}", i, data.len());
+        debug_assert_eq!(chunk.len(), 4, "Chunk has {} bytes instead of 4", chunk.len());
+
+        data[i] = f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
     }
+    
+    // Remove processed bytes
+    audio_buffer.drain(..bytes_needed);
 }
 
 fn on_output_data_i16(data: &mut [i16], buffer: &Arc<Mutex<Vec<u8>>>) {
@@ -240,11 +249,31 @@ fn on_output_data_i16(data: &mut [i16], buffer: &Arc<Mutex<Vec<u8>>>) {
     }
     
     // Convert bytes to i16 samples
-    for (i, sample_bytes) in audio_buffer.drain(..bytes_needed).collect::<Vec<_>>().chunks(2).enumerate() {
-        if i < data.len() {
-            data[i] = i16::from_le_bytes([sample_bytes[0], sample_bytes[1]]);
-        }
+    for (i, sample_bytes) in audio_buffer[..bytes_needed].chunks(2).enumerate() {
+        data[i] = i16::from_le_bytes([sample_bytes[0], sample_bytes[1]]);
     }
+    
+    // Remove processed bytes
+    audio_buffer.drain(..bytes_needed);
+}
+
+fn on_output_data_i32(data: &mut [i32], buffer: &Arc<Mutex<Vec<u8>>>) {
+    let mut audio_buffer = buffer.lock().unwrap();
+    let bytes_needed = data.len() * 4;
+    
+    if audio_buffer.len() < bytes_needed {
+        // Not enough data, fill with silence
+        data.fill(0);
+        return;
+    }
+    
+    // Convert bytes to i16 samples
+    for (i, sample_bytes) in audio_buffer[..bytes_needed].chunks(4).enumerate() {
+        data[i] = i32::from_le_bytes([sample_bytes[0], sample_bytes[1], sample_bytes[2], sample_bytes[3]]);
+    }
+    
+    // Remove processed bytes
+    audio_buffer.drain(..bytes_needed);
 }
 
 fn on_output_data_u16(data: &mut [u16], buffer: &Arc<Mutex<Vec<u8>>>) {
@@ -258,9 +287,10 @@ fn on_output_data_u16(data: &mut [u16], buffer: &Arc<Mutex<Vec<u8>>>) {
     }
     
     // Convert bytes to u16 samples
-    for (i, sample_bytes) in audio_buffer.drain(..bytes_needed).collect::<Vec<_>>().chunks(2).enumerate() {
-        if i < data.len() {
-            data[i] = u16::from_le_bytes([sample_bytes[0], sample_bytes[1]]);
-        }
+    for (i, sample_bytes) in audio_buffer[..bytes_needed].chunks(2).enumerate() {
+        data[i] = u16::from_le_bytes([sample_bytes[0], sample_bytes[1]]);
     }
+
+    // Remove processed bytes
+    audio_buffer.drain(..bytes_needed);
 }
