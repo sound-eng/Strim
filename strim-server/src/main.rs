@@ -153,6 +153,12 @@ fn start_default_input_capture(tx: mpsc::Sender<Message>) -> Result<cpal::Stream
             err_fn,
             None,
         )?,
+        SampleFormat::I32 => device.build_input_stream(
+            &config, 
+            move |data: &[i32], _| on_input_data_i32(data, &tx), 
+            err_fn, 
+            None
+        )?,
         _ => anyhow::bail!("Unsupported sample format"),
     };
 
@@ -173,6 +179,15 @@ fn on_input_data_f32(data: &[f32], tx: &mpsc::Sender<Message>) {
 /// Convert i16 audio samples to bytes and send as AudioData message
 fn on_input_data_i16(data: &[i16], tx: &mpsc::Sender<Message>) {
     let mut out = Vec::with_capacity(data.len() * 2);
+    for &s in data {
+        out.extend_from_slice(&s.to_le_bytes());
+    }
+    let _ = tx.send(Message::AudioData(out));
+}
+
+/// Convert i32 audio samples to bytes and send as AudioData message
+fn on_input_data_i32(data: &[i32], tx: &mpsc::Sender<Message>) {
+    let mut out = Vec::with_capacity(data.len() * 4);
     for &s in data {
         out.extend_from_slice(&s.to_le_bytes());
     }
