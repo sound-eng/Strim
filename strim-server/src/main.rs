@@ -1,4 +1,5 @@
 use anyhow::Result;
+use clap::Parser;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{SampleFormat, StreamConfig};
 use std::time::Duration;
@@ -10,7 +11,6 @@ use std::thread;
 use strim_shared::{AudioConfig, AudioSample, Message, SampleFormat as SharedSampleFormat};
 
 mod cli_commands;
-use clap::Parser;
 
 fn main() {
     let args = cli_commands::Cli::parse();
@@ -169,42 +169,6 @@ fn start_default_input_capture(tx: mpsc::Sender<Message>) -> Result<cpal::Stream
 }
 
 /// Convert f32 audio samples to bytes and send as AudioData message
-fn on_input_data_f32(data: &[f32], tx: &mpsc::Sender<Message>) {
-    let mut out = Vec::with_capacity(data.len() * 4);
-    for &s in data {
-        out.extend_from_slice(&s.to_le_bytes());
-    }
-    // println!("Captured {} samples", out.len());
-    let _ = tx.send(Message::AudioData(out));
-}
-
-/// Convert i16 audio samples to bytes and send as AudioData message
-fn on_input_data_i16(data: &[i16], tx: &mpsc::Sender<Message>) {
-    let mut out = Vec::with_capacity(data.len() * 2);
-    for &s in data {
-        out.extend_from_slice(&s.to_le_bytes());
-    }
-    let _ = tx.send(Message::AudioData(out));
-}
-
-/// Convert i32 audio samples to bytes and send as AudioData message
-fn on_input_data_i32(data: &[i32], tx: &mpsc::Sender<Message>) {
-    let mut out = Vec::with_capacity(data.len() * 4);
-    for &s in data {
-        out.extend_from_slice(&s.to_le_bytes());
-    }
-    let _ = tx.send(Message::AudioData(out));
-}
-
-/// Convert u16 audio samples to bytes and send as AudioData message
-fn on_input_data_u16(data: &[u16], tx: &mpsc::Sender<Message>) {
-    let mut out = Vec::with_capacity(data.len() * 2);
-    for &s in data {
-        out.extend_from_slice(&s.to_le_bytes());
-    }
-    let _ = tx.send(Message::AudioData(out));
-}
-
 fn on_input_data<T: AudioSample>(data: &[T], tx: &mpsc::Sender<Message>) {
     let mut out = Vec::with_capacity(data.len() * T::BYTE_SIZE);
     for &s in data {

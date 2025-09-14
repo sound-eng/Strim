@@ -1,4 +1,5 @@
 use anyhow::Result;
+use clap::Parser;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{SampleFormat, StreamConfig};
 use std::io::Read;
@@ -6,11 +7,11 @@ use std::net::TcpStream;
 use std::sync::{mpsc, Arc, Mutex, atomic::{AtomicBool, Ordering}};
 use std::thread;
 use std::time::Duration;
+
 use strim_shared::{Message, AudioConfig, SampleFormat as SharedSampleFormat, AudioSample};
 
 mod cli_commands;
 
-use clap::Parser;
 
 fn main() -> Result<()> {
     let args = cli_commands::Cli::parse();
