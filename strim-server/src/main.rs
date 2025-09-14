@@ -174,7 +174,7 @@ fn on_input_data_f32(data: &[f32], tx: &mpsc::Sender<Message>) {
     for &s in data {
         out.extend_from_slice(&s.to_le_bytes());
     }
-    // println!("Captured {} samples", data.len());
+    // println!("Captured {} samples", out.len());
     let _ = tx.send(Message::AudioData(out));
 }
 
