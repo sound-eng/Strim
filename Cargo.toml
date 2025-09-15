@@ -2,8 +2,7 @@
 resolver = "2"
 members = [
     "strim-shared",
-    "strim-server", 
-    "strim-client"
+    "strim"
 ]
 
 [workspace.dependencies]

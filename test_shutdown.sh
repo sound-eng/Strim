@@ -2,8 +2,8 @@
 
 echo "Testing client graceful shutdown..."
 
-# Start the client in the background
-cargo run --bin strim-client &
+# Start the unified client in the background (defaults: host localhost, port DEFAULT_PORT)
+cargo run -p strim -- client &
 CLIENT_PID=$!
 
 echo "Client started with PID: $CLIENT_PID"

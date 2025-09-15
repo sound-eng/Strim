@@ -4,12 +4,13 @@ This file provides guidance to WARP (warp.dev) when working with code in this re
 
 ## Project Overview
 
-Strim is a pair of CLI applications (client and server) for real-time audio streaming over TCP. It's an exercise project demonstrating audio capture, network streaming, and audio playback in Rust.
+Strim is a unified CLI application with server and client modes for real-time audio streaming over TCP. It's an exercise project demonstrating audio capture, network streaming, and audio playback in Rust.
 
 **Key Components:**
-- **strim-server**: Captures audio from the default input device and streams it to connected clients
-- **strim-client**: Connects to the server and plays received audio through the default output device  
+- **strim**: Unified CLI application that can run in either server or client mode
 - **strim-shared**: Common types, protocols, and utilities used by both client and server
+- **strim-server**: Legacy server binary (still available)
+- **strim-client**: Legacy client binary (still available)
 
 ## Architecture
 
@@ -54,6 +55,26 @@ cargo build --workspace --release
 ```
 
 ### Running the Applications
+
+**Unified CLI (Preferred):**
+```bash
+# Start server with default settings (server mode is default)
+cargo run -p strim
+
+# Start server on custom port using default mode
+cargo run -p strim -- -p 9000
+
+# Start server explicitly with custom port and device
+cargo run -p strim -- server -p 9000 -d "device-name"
+
+# Connect client to localhost:8080
+cargo run -p strim -- client
+
+# Connect client to custom host/port
+cargo run -p strim -- client -H 192.168.1.100 -p 9000
+```
+
+**Legacy Binaries (Still Available):**
 ```bash
 # Start the server (default port 8080)
 cargo run --bin strim-server
@@ -71,6 +92,7 @@ cargo run --bin strim-client -- --host 192.168.1.100 --port 9000
 ### Development Workflow
 ```bash
 # Run individual package checks
+cargo check -p strim        # Unified CLI
 cargo check -p strim-server
 cargo check -p strim-client  
 cargo check -p strim-shared
@@ -82,6 +104,7 @@ cargo fmt --all
 cargo clippy --workspace -- -D warnings
 
 # Build specific binary
+cargo build -p strim         # Unified CLI (preferred)
 cargo build --bin strim-server
 cargo build --bin strim-client
 ```
@@ -97,6 +120,7 @@ cargo test --workspace
 cargo test -p strim-shared    # Message serialization, AudioSample trait, format conversions
 cargo test -p strim-server    # Audio processing, client management, network broadcasting
 cargo test -p strim-client    # Connection management, audio playback, retry logic
+cargo test -p strim           # Unified CLI application
 
 # Run integration tests (network protocol verification)
 cargo test -p strim-shared --test integration_tests

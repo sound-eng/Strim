@@ -64,6 +64,8 @@ pub enum Message {
     AudioData(Vec<u8>),
     /// Audio configuration sent when client connects
     Config(AudioConfig),
+    /// Ping (empty) message for health check
+    Ping,
     /// Error message from either server or client
     Error(String),
 }
