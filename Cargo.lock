@@ -795,7 +795,7 @@ dependencies = [
 
 [[package]]
 name = "strim"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -808,7 +808,7 @@ dependencies = [
 
 [[package]]
 name = "strim-shared"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "bincode",

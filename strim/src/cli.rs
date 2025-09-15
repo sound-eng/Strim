@@ -2,7 +2,7 @@ use clap::{Parser, Subcommand, Args as ClapArgs};
 use strim_shared::DEFAULT_PORT;
 
 #[derive(Parser, Debug)]
-#[command(name = "Strim", version, about = "Audio streaming tool")] 
+#[command(name = "Strim", version = env!("CARGO_PKG_VERSION"), about = "Audio streaming tool")]
 pub struct Args {
     #[command(subcommand)]
     pub mode: Option<Mode>,
@@ -24,7 +24,7 @@ pub enum Mode {
 pub struct ServerArgs {
     #[arg(short = 'p', long, default_value_t = DEFAULT_PORT, help = "Port to bind server to (for server mode)")]
     pub port: u16,
-    #[arg(short = 'd', long, default_value = "", help = "Audio device ID (for server mode)")]
+    #[arg(short = 'd', long, default_value = "default", help = "Audio device ID (for server mode)")]
     pub device_id: String,
 }
 
