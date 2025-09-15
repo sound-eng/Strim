@@ -12,6 +12,7 @@ pub fn start_audio_playback(rx: mpsc::Receiver<Message>, running: Arc<AtomicBool
         Ok(Message::Config(config)) => config,
         Ok(Message::Error(err)) => return Err(anyhow::anyhow!("Server error: {}", err)),
         Ok(Message::AudioData(_)) => AudioConfig { sample_rate: 44100, channels: 2, sample_format: SharedSampleFormat::F32 },
+        Ok(Message::Ping) => return Err(anyhow::anyhow!("Expected config on playback start, got Ping")),
         Err(e) => return Err(anyhow::anyhow!("Failed to receive config: {}", e)),
     };
 
@@ -43,6 +44,7 @@ pub fn start_audio_playback(rx: mpsc::Receiver<Message>, running: Arc<AtomicBool
                         buffer.extend_from_slice(&data);
                     }
                     Message::Config(_) => {}
+                    Message::Ping => {}
                     Message::Error(err) => eprintln!("Server error: {}", err),
                 },
                 Err(mpsc::RecvTimeoutError::Timeout) => continue,

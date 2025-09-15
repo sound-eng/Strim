@@ -164,7 +164,7 @@ fn health_check_loop(clients: Arc<Mutex<Vec<TcpStream>>>, running: Arc<AtomicBoo
         let mut i = 0;
         while i < lock.len() {
             let client_addr = lock[i].peer_addr().map(|addr| addr.to_string()).unwrap_or_else(|_| "unknown".to_string());
-            let ping_msg = Message::AudioData(vec![]);
+            let ping_msg = Message::Ping;
             if let Ok(serialized) = ping_msg.serialize() {
                 let write_res = lock[i].write_all(&serialized);
                 if write_res.is_err() {
