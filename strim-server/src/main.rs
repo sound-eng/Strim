@@ -341,3 +341,265 @@ fn get_local_ip() -> Option<std::net::IpAddr> {
     udp_socket.connect("8.8.8.8:80").ok()?;
     udp_socket.local_addr().ok().map(|addr| addr.ip())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use strim_shared::{Message, AudioConfig, SampleFormat};
+    use std::sync::{mpsc, Arc, Mutex, atomic::{AtomicBool, Ordering}};
+    use std::net::{TcpListener, TcpStream};
+    use std::io::{Read, Write};
+    use std::thread;
+    use std::time::Duration;
+
+    #[test]
+    fn test_get_local_ip() {
+        let ip = get_local_ip();
+        // We can't guarantee what the IP will be, but it should be some valid IP
+        // This test mainly checks that the function doesn't panic
+        match ip {
+            Some(addr) => {
+                // Should be a valid IP address
+                assert!(addr.is_ipv4() || addr.is_ipv6());
+                // Should not be the loopback or unspecified address in normal cases
+                println!("Local IP detected: {}", addr);
+            }
+            None => {
+                // In some environments (like CI), this might fail
+                println!("Could not detect local IP (this is sometimes expected in test environments)");
+            }
+        }
+    }
+
+    #[test]
+    fn test_on_input_data_f32() {
+        let (tx, rx) = mpsc::channel::<Message>();
+        let test_data: Vec<f32> = vec![0.0, 0.5, -0.5, 1.0, -1.0];
+        
+        // Call the function
+        on_input_data(&test_data, &tx);
+        
+        // Receive the message
+        let message = rx.recv().expect("Should receive a message");
+        
+        match message {
+            Message::AudioData(bytes) => {
+                // Should have correct number of bytes (5 f32s * 4 bytes each = 20 bytes)
+                assert_eq!(bytes.len(), 20);
+                
+                // Convert back to f32s to verify
+                let mut restored_data = Vec::new();
+                for chunk in bytes.chunks(4) {
+                    let array: [u8; 4] = [chunk[0], chunk[1], chunk[2], chunk[3]];
+                    restored_data.push(f32::from_le_bytes(array));
+                }
+                
+                assert_eq!(restored_data, test_data);
+            }
+            _ => panic!("Should receive AudioData message"),
+        }
+    }
+
+    #[test]
+    fn test_on_input_data_i16() {
+        let (tx, rx) = mpsc::channel::<Message>();
+        let test_data: Vec<i16> = vec![0, 1000, -1000, i16::MAX, i16::MIN];
+        
+        // Call the function
+        on_input_data(&test_data, &tx);
+        
+        // Receive the message
+        let message = rx.recv().expect("Should receive a message");
+        
+        match message {
+            Message::AudioData(bytes) => {
+                // Should have correct number of bytes (5 i16s * 2 bytes each = 10 bytes)
+                assert_eq!(bytes.len(), 10);
+                
+                // Convert back to i16s to verify
+                let mut restored_data = Vec::new();
+                for chunk in bytes.chunks(2) {
+                    let array: [u8; 2] = [chunk[0], chunk[1]];
+                    restored_data.push(i16::from_le_bytes(array));
+                }
+                
+                assert_eq!(restored_data, test_data);
+            }
+            _ => panic!("Should receive AudioData message"),
+        }
+    }
+
+    /// Test helper to create a mock TCP connection pair
+    fn create_mock_tcp_pair() -> (TcpListener, u16) {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("Should bind to localhost");
+        let port = listener.local_addr().expect("Should get local address").port();
+        (listener, port)
+    }
+
+    #[test]
+    fn test_client_connection_and_config_send() {
+        let (listener, port) = create_mock_tcp_pair();
+        
+        // Create test audio config
+        let test_config = AudioConfig {
+            sample_rate: 44100,
+            channels: 2,
+            sample_format: SampleFormat::F32,
+        };
+        
+        // Spawn a thread to accept connection and send config
+        let config_clone = test_config.clone();
+        let server_handle = thread::spawn(move || {
+            let (mut stream, _addr) = listener.accept().expect("Should accept connection");
+            
+            // Send config message
+            let config_msg = Message::Config(config_clone);
+            let serialized = config_msg.serialize().expect("Should serialize config");
+            stream.write_all(&serialized).expect("Should send config");
+            
+            // Send a test audio data message
+            let audio_msg = Message::AudioData(vec![1, 2, 3, 4]);
+            let serialized = audio_msg.serialize().expect("Should serialize audio data");
+            stream.write_all(&serialized).expect("Should send audio data");
+        });
+        
+        // Connect as client
+        let mut client_stream = TcpStream::connect(format!("127.0.0.1:{}", port))
+            .expect("Should connect to server");
+        
+        // Read and deserialize config message
+        let mut buffer = vec![0u8; 1024];
+        let bytes_read = client_stream.read(&mut buffer).expect("Should read data");
+        buffer.truncate(bytes_read);
+        
+        let (config_message, remaining) = Message::deserialize(&buffer)
+            .expect("Should deserialize config message");
+        
+        match config_message {
+            Message::Config(received_config) => {
+                assert_eq!(received_config.sample_rate, test_config.sample_rate);
+                assert_eq!(received_config.channels, test_config.channels);
+                assert_eq!(received_config.sample_format, test_config.sample_format);
+            }
+            _ => panic!("Should receive config message first"),
+        }
+        
+        // Read audio data message from remaining bytes or read more
+        let audio_data = if remaining.is_empty() {
+            let mut buffer = vec![0u8; 1024];
+            let bytes_read = client_stream.read(&mut buffer).expect("Should read more data");
+            buffer.truncate(bytes_read);
+            buffer
+        } else {
+            remaining.to_vec()
+        };
+        
+        let (audio_message, _) = Message::deserialize(&audio_data)
+            .expect("Should deserialize audio message");
+        
+        match audio_message {
+            Message::AudioData(data) => {
+                assert_eq!(data, vec![1, 2, 3, 4]);
+            }
+            _ => panic!("Should receive audio data message"),
+        }
+        
+        server_handle.join().expect("Server thread should complete");
+    }
+
+    #[test]
+    fn test_broadcast_loop_basic() {
+        let (tx, rx) = mpsc::channel::<Message>();
+        let clients: Arc<Mutex<Vec<TcpStream>>> = Arc::new(Mutex::new(Vec::new()));
+        let running = Arc::new(AtomicBool::new(true));
+        
+        // Create a mock client connection
+        let (listener, port) = create_mock_tcp_pair();
+        
+        // Start the broadcast loop in a separate thread
+        let clients_clone = Arc::clone(&clients);
+        let running_clone = Arc::clone(&running);
+        let broadcast_handle = thread::spawn(move || {
+            broadcast_loop(rx, clients_clone, running_clone);
+        });
+        
+        // Connect a mock client
+        let client_handle = thread::spawn(move || {
+            let (stream, _addr) = listener.accept().expect("Should accept client");
+            
+            // Add client to the list
+            clients.lock().unwrap().push(stream);
+            
+            // Wait a bit for the broadcast to happen
+            thread::sleep(Duration::from_millis(100));
+        });
+        
+        // Connect to the server as a client
+        let mut client_stream = TcpStream::connect(format!("127.0.0.1:{}", port))
+            .expect("Should connect as client");
+        
+        // Wait for client to be added
+        client_handle.join().expect("Client thread should complete");
+        
+        // Send a test message
+        let test_msg = Message::AudioData(vec![10, 20, 30, 40]);
+        tx.send(test_msg).expect("Should send test message");
+        
+        // Give broadcast loop time to process
+        thread::sleep(Duration::from_millis(50));
+        
+        // Try to read the message as the client
+        client_stream.set_nonblocking(true).expect("Should set non-blocking");
+        let mut buffer = vec![0u8; 1024];
+        
+        // We might get the message, but this test mainly verifies the broadcast doesn't panic
+        let _ = client_stream.read(&mut buffer);
+        
+        // Stop the broadcast loop
+        running.store(false, Ordering::SeqCst);
+        drop(tx); // Close the channel to make broadcast_loop exit
+        
+        broadcast_handle.join().expect("Broadcast thread should complete");
+    }
+
+    #[test]
+    fn test_message_channel_communication() {
+        let (tx, rx) = mpsc::channel::<Message>();
+        
+        // Test sending various message types
+        let messages = vec![
+            Message::AudioData(vec![1, 2, 3]),
+            Message::Config(AudioConfig {
+                sample_rate: 48000,
+                channels: 1,
+                sample_format: SampleFormat::I16,
+            }),
+            Message::Error("Test error".to_string()),
+        ];
+        
+        // Send messages
+        for msg in messages.clone() {
+            tx.send(msg).expect("Should send message");
+        }
+        
+        // Receive and verify messages
+        for (i, expected_msg) in messages.iter().enumerate() {
+            let received_msg = rx.recv().expect("Should receive message");
+            
+            match (expected_msg, &received_msg) {
+                (Message::AudioData(expected), Message::AudioData(received)) => {
+                    assert_eq!(expected, received, "AudioData mismatch at index {}", i);
+                }
+                (Message::Config(expected), Message::Config(received)) => {
+                    assert_eq!(expected.sample_rate, received.sample_rate);
+                    assert_eq!(expected.channels, received.channels);
+                    assert_eq!(expected.sample_format, received.sample_format);
+                }
+                (Message::Error(expected), Message::Error(received)) => {
+                    assert_eq!(expected, received, "Error message mismatch at index {}", i);
+                }
+                _ => panic!("Message type mismatch at index {}", i),
+            }
+        }
+    }
+}

@@ -84,22 +84,20 @@ fn main() -> Result<()> {
     let running_conn = Arc::clone(&running);
     let audio_tx_clone = audio_tx.clone();
     let connection_tx_clone = connection_tx.clone();
-    thread::spawn(move || {
+    let initial_connection_handle = thread::spawn(move || {
         connection_manager(host, port, running_conn, connection_tx_clone, audio_tx_clone);
     });
     
     // Main loop: handle connection events and manage audio playback
-    let mut current_stream: Option<TcpStream> = None;
     let mut audio_handle: Option<thread::JoinHandle<()>> = None;
-    let mut connection_manager_handle: Option<thread::JoinHandle<()>> = None;
+    let mut connection_manager_handle: Option<thread::JoinHandle<()>> = Some(initial_connection_handle);
     let mut audio_tx = audio_tx;
     let mut audio_rx = audio_rx;
     
     while running.load(Ordering::SeqCst) {
-        match connection_rx.recv_timeout(Duration::from_millis(200)) {
-            Ok(ConnectionEvent::Connected(stream)) => {
+        match connection_rx.recv_timeout(Duration::from_millis(100)) {
+            Ok(ConnectionEvent::Connected(_stream)) => {
                 println!("Connection established, starting audio playback");
-                current_stream = Some(stream);
                 
                 // Start audio playback thread with current receiver
                 let running_audio = Arc::clone(&running);
@@ -118,7 +116,6 @@ fn main() -> Result<()> {
             Ok(ConnectionEvent::Disconnected) => {
                 println!("Main thread received ConnectionEvent::Disconnected");
                 println!("Connection lost, will attempt to reconnect...");
-                current_stream = None;
                 
                 // Stop audio playback
                 if let Some(handle) = audio_handle.take() {
@@ -140,7 +137,11 @@ fn main() -> Result<()> {
                 println!("Shutdown requested");
                 break;
             }
-            Err(_) => {
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                // Timeout occurred, continue loop to check running flag
+                continue;
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
                 println!("Connection channel closed");
                 break;
             }
@@ -148,14 +149,19 @@ fn main() -> Result<()> {
     }
     
     // Cleanup
+    println!("Starting cleanup...");
+    
     if let Some(handle) = audio_handle {
+        println!("Joining audio thread...");
         let _ = handle.join();
     }
     
     if let Some(handle) = connection_manager_handle {
-        println!("Dropping connection manager thread handle...");
-        drop(handle);
-        println!("Connection manager thread handle dropped");
+        println!("Joining connection manager thread...");
+        // Give the connection manager thread a moment to see the running flag change
+        thread::sleep(Duration::from_millis(200));
+        let _ = handle.join();
+        println!("Connection manager thread joined");
     }
     
     println!("Client disconnected");
@@ -220,6 +226,9 @@ fn network_read_loop(
     running: Arc<AtomicBool>,
     connection_tx: mpsc::Sender<ConnectionEvent>,
 ) {
+    // Make the stream non-blocking to allow periodic shutdown checks
+    stream.set_nonblocking(true).expect("Failed to set non-blocking");
+    
     // size 4096 and 2*4096 wasn't enough when connecting through wifi. consider increasing even more:
     let mut buffer = [0u8; 4*4096]; 
     let mut message_buffer = Vec::new();
@@ -259,6 +268,12 @@ fn network_read_loop(
                 }
             }
             Err(e) => {
+                if e.kind() == std::io::ErrorKind::WouldBlock {
+                    // No data available right now, sleep briefly and continue
+                    thread::sleep(Duration::from_millis(10));
+                    continue;
+                }
+                
                 if running.load(Ordering::SeqCst) {
                     eprintln!("Network read error: {e}");
                     // Notify connection manager about disconnection
@@ -271,6 +286,7 @@ fn network_read_loop(
     }
     
     // Gracefully close the connection
+    println!("Network read loop exiting, closing connection");
     let _ = stream.shutdown(std::net::Shutdown::Both);
 }
 
@@ -427,4 +443,287 @@ fn on_output_data<T: AudioSample>(data: &mut [T], buffer: &Arc<Mutex<Vec<u8>>>) 
 
     // Remove processed bytes
     audio_buffer.drain(..bytes_needed);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use strim_shared::{Message, AudioConfig, SampleFormat as SharedSampleFormat};
+    use std::sync::{mpsc, Arc, Mutex, atomic::{AtomicBool, Ordering}};
+    use std::net::{TcpListener, TcpStream};
+    use std::thread;
+    use std::time::Duration;
+
+    #[test]
+    fn test_connection_event_enum() {
+        // Test that ConnectionEvent can be created and sent through channels
+        let (tx, rx) = mpsc::channel::<ConnectionEvent>();
+        
+        // Test Connected event
+        let listener = TcpListener::bind("127.0.0.1:0").expect("Should bind");
+        let port = listener.local_addr().unwrap().port();
+        
+        let tx_clone = tx.clone();
+        thread::spawn(move || {
+            let (stream, _) = listener.accept().expect("Should accept");
+            tx_clone.send(ConnectionEvent::Connected(stream)).expect("Should send Connected event");
+        });
+        
+        let _client_stream = TcpStream::connect(format!("127.0.0.1:{}", port))
+            .expect("Should connect");
+        
+        let event = rx.recv_timeout(Duration::from_millis(100)).expect("Should receive event");
+        match event {
+            ConnectionEvent::Connected(_) => (), // Success
+            _ => panic!("Should receive Connected event"),
+        }
+        
+        // Test Disconnected event
+        tx.send(ConnectionEvent::Disconnected).expect("Should send Disconnected event");
+        let event = rx.recv_timeout(Duration::from_millis(100)).expect("Should receive event");
+        match event {
+            ConnectionEvent::Disconnected => (), // Success
+            _ => panic!("Should receive Disconnected event"),
+        }
+    }
+
+    #[test]
+    fn test_connect_with_retry_success() {
+        let running = Arc::new(AtomicBool::new(true));
+        
+        // Create a server that accepts connections
+        let listener = TcpListener::bind("127.0.0.1:0").expect("Should bind");
+        let port = listener.local_addr().unwrap().port();
+        
+        thread::spawn(move || {
+            let (_stream, _addr) = listener.accept().expect("Should accept connection");
+        });
+        
+        // Test successful connection
+        let result = connect_with_retry("127.0.0.1", port, running);
+        assert!(result.is_ok(), "Connection should succeed");
+    }
+
+    #[test]
+    fn test_connect_with_retry_shutdown() {
+        let running = Arc::new(AtomicBool::new(true));
+        
+        let running_clone = Arc::clone(&running);
+        thread::spawn(move || {
+            // Shutdown after a short delay
+            thread::sleep(Duration::from_millis(50));
+            running_clone.store(false, Ordering::SeqCst);
+        });
+        
+        // Try to connect to a non-existent server
+        let result = connect_with_retry("127.0.0.1", 12345, running); // Use a likely unused port
+        assert!(result.is_err(), "Should fail due to shutdown");
+    }
+
+    #[test]
+    fn test_on_output_data_f32() {
+        let buffer = Arc::new(Mutex::new(Vec::new()));
+        let mut output_data: [f32; 4] = [0.0; 4];
+        
+        // Test with empty buffer (should fill with silence)
+        on_output_data(&mut output_data, &buffer);
+        assert_eq!(output_data, [0.0, 0.0, 0.0, 0.0]);
+        
+        // Add some audio data to buffer (4 f32s = 16 bytes)
+        let test_samples = [0.5f32, -0.5f32, 1.0f32, -1.0f32];
+        let mut test_bytes = Vec::new();
+        for sample in test_samples {
+            test_bytes.extend_from_slice(&sample.to_le_bytes());
+        }
+        
+        {
+            let mut buf = buffer.lock().unwrap();
+            buf.extend_from_slice(&test_bytes);
+        }
+        
+        // Test with sufficient data
+        on_output_data(&mut output_data, &buffer);
+        assert_eq!(output_data, test_samples);
+        
+        // Buffer should be empty now
+        assert!(buffer.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_on_output_data_i16() {
+        let buffer = Arc::new(Mutex::new(Vec::new()));
+        let mut output_data: [i16; 3] = [0; 3];
+        
+        // Test with insufficient data
+        {
+            let mut buf = buffer.lock().unwrap();
+            buf.extend_from_slice(&[1u8, 2u8]); // Only 2 bytes, need 6
+        }
+        
+        on_output_data(&mut output_data, &buffer);
+        assert_eq!(output_data, [0, 0, 0]); // Should be filled with silence
+        
+        // Add sufficient data
+        let test_samples = [100i16, -200i16, 300i16];
+        let mut test_bytes = Vec::new();
+        for sample in test_samples {
+            test_bytes.extend_from_slice(&sample.to_le_bytes());
+        }
+        
+        {
+            let mut buf = buffer.lock().unwrap();
+            buf.clear();
+            buf.extend_from_slice(&test_bytes);
+        }
+        
+        on_output_data(&mut output_data, &buffer);
+        assert_eq!(output_data, test_samples);
+    }
+
+    #[test]
+    fn test_audio_config_handling() {
+        let (tx, rx) = mpsc::channel::<Message>();
+        
+        // Test different config scenarios
+        let configs = vec![
+            AudioConfig {
+                sample_rate: 44100,
+                channels: 2,
+                sample_format: SharedSampleFormat::F32,
+            },
+            AudioConfig {
+                sample_rate: 48000,
+                channels: 1,
+                sample_format: SharedSampleFormat::I16,
+            },
+        ];
+        
+        for config in configs {
+            let config_msg = Message::Config(config.clone());
+            tx.send(config_msg).expect("Should send config");
+            
+            let received = rx.recv().expect("Should receive config");
+            match received {
+                Message::Config(received_config) => {
+                    assert_eq!(received_config.sample_rate, config.sample_rate);
+                    assert_eq!(received_config.channels, config.channels);
+                    assert_eq!(received_config.sample_format, config.sample_format);
+                }
+                _ => panic!("Should receive Config message"),
+            }
+        }
+    }
+
+    #[test]
+    fn test_audio_buffer_management() {
+        let buffer = Arc::new(Mutex::new(Vec::new()));
+        
+        // Test adding data to buffer
+        let test_data = vec![1u8, 2u8, 3u8, 4u8, 5u8, 6u8, 7u8, 8u8];
+        {
+            let mut buf = buffer.lock().unwrap();
+            buf.extend_from_slice(&test_data);
+        }
+        
+        assert_eq!(buffer.lock().unwrap().len(), 8);
+        
+        // Test partial consumption (simulate on_output_data)
+        let mut output: [i16; 2] = [0; 2]; // Will consume 4 bytes
+        on_output_data(&mut output, &buffer);
+        
+        // Should have 4 bytes remaining
+        assert_eq!(buffer.lock().unwrap().len(), 4);
+        assert_eq!(*buffer.lock().unwrap(), vec![5u8, 6u8, 7u8, 8u8]);
+    }
+
+    #[test]
+    fn test_network_message_handling() {
+        let (tx, rx) = mpsc::channel::<Message>();
+        let running = Arc::new(AtomicBool::new(true));
+        let buffer = Arc::new(Mutex::new(Vec::new()));
+        
+        // Test receiving different message types
+        let messages = vec![
+            Message::Config(AudioConfig {
+                sample_rate: 44100,
+                channels: 2,
+                sample_format: SharedSampleFormat::F32,
+            }),
+            Message::AudioData(vec![1, 2, 3, 4, 5, 6, 7, 8]),
+            Message::Error("Test error".to_string()),
+        ];
+        
+        // Send messages
+        for msg in messages.clone() {
+            tx.send(msg).expect("Should send message");
+        }
+        
+        // Receive and verify messages
+        for (i, expected_msg) in messages.iter().enumerate() {
+            let received_msg = rx.recv().expect("Should receive message");
+            
+            match (expected_msg, &received_msg) {
+                (Message::Config(expected), Message::Config(received)) => {
+                    assert_eq!(expected.sample_rate, received.sample_rate);
+                    assert_eq!(expected.channels, received.channels);
+                    assert_eq!(expected.sample_format, received.sample_format);
+                }
+                (Message::AudioData(expected), Message::AudioData(received)) => {
+                    assert_eq!(expected, received, "AudioData mismatch at index {}", i);
+                    
+                    // Simulate adding to buffer
+                    {
+                        let mut buf = buffer.lock().unwrap();
+                        buf.extend_from_slice(received);
+                    }
+                }
+                (Message::Error(expected), Message::Error(received)) => {
+                    assert_eq!(expected, received, "Error message mismatch at index {}", i);
+                }
+                _ => panic!("Message type mismatch at index {}", i),
+            }
+        }
+        
+        // Check that audio data was added to buffer
+        assert_eq!(buffer.lock().unwrap().len(), 8);
+    }
+
+    #[test]
+    fn test_sample_format_conversion() {
+        // Test all supported sample format conversions
+        let formats = vec![
+            SharedSampleFormat::F32,
+            SharedSampleFormat::I16,
+            SharedSampleFormat::U16,
+            SharedSampleFormat::I32,
+        ];
+        
+        for format in formats {
+            let cpal_format: cpal::SampleFormat = format.into();
+            let back_to_shared = SharedSampleFormat::try_from(cpal_format).expect("Should convert back");
+            assert_eq!(format, back_to_shared, "Conversion failed for {:?}", format);
+        }
+    }
+
+    #[test]
+    fn test_connection_lifecycle() {
+        let (connection_tx, connection_rx) = mpsc::channel::<ConnectionEvent>();
+        
+        // Simulate connection lifecycle events
+        let events = vec![
+            ConnectionEvent::Disconnected,
+            // ConnectionEvent::Shutdown, // This variant is never constructed according to warnings
+        ];
+        
+        for event in events {
+            connection_tx.send(event).expect("Should send event");
+            let received = connection_rx.recv().expect("Should receive event");
+            
+            match received {
+                ConnectionEvent::Connected(_) => println!("Received Connected event"),
+                ConnectionEvent::Disconnected => println!("Received Disconnected event"),
+                ConnectionEvent::Shutdown => println!("Received Shutdown event"),
+            }
+        }
+    }
 }

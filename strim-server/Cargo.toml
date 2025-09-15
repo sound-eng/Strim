@@ -15,3 +15,6 @@ anyhow = { workspace = true }
 clap = { workspace = true }
 tokio = { workspace = true }
 ctrlc = { workspace = true }
+
+[dev-dependencies]
+tokio-test = "0.4.4"

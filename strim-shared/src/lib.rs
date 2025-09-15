@@ -106,3 +106,129 @@ pub const DEFAULT_PORT: u16 = 8080;
 
 /// Default buffer size for audio streaming (4KB chunks)
 pub const DEFAULT_BUFFER_SIZE: usize = 4096;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_sample_format_conversion_from_cpal() {
+        assert_eq!(SampleFormat::try_from(cpal::SampleFormat::I16).unwrap(), SampleFormat::I16);
+        assert_eq!(SampleFormat::try_from(cpal::SampleFormat::I32).unwrap(), SampleFormat::I32);
+        assert_eq!(SampleFormat::try_from(cpal::SampleFormat::F32).unwrap(), SampleFormat::F32);
+        assert_eq!(SampleFormat::try_from(cpal::SampleFormat::U16).unwrap(), SampleFormat::U16);
+    }
+
+    #[test]
+    fn test_sample_format_conversion_to_cpal() {
+        assert_eq!(cpal::SampleFormat::from(SampleFormat::I16), cpal::SampleFormat::I16);
+        assert_eq!(cpal::SampleFormat::from(SampleFormat::I32), cpal::SampleFormat::I32);
+        assert_eq!(cpal::SampleFormat::from(SampleFormat::F32), cpal::SampleFormat::F32);
+        assert_eq!(cpal::SampleFormat::from(SampleFormat::U16), cpal::SampleFormat::U16);
+    }
+
+    #[test]
+    fn test_audio_config_creation() {
+        let config = AudioConfig {
+            sample_rate: 44100,
+            channels: 2,
+            sample_format: SampleFormat::F32,
+        };
+        
+        assert_eq!(config.sample_rate, 44100);
+        assert_eq!(config.channels, 2);
+        assert_eq!(config.sample_format, SampleFormat::F32);
+    }
+
+    #[test]
+    fn test_message_serialization_roundtrip() {
+        let test_cases = vec![
+            Message::AudioData(vec![1, 2, 3, 4, 5]),
+            Message::Config(AudioConfig {
+                sample_rate: 48000,
+                channels: 1,
+                sample_format: SampleFormat::I16,
+            }),
+            Message::Error("Test error message".to_string()),
+        ];
+
+        for original_msg in test_cases {
+            // Serialize the message
+            let serialized = original_msg.serialize().expect("Serialization should succeed");
+            
+            // Check that serialized data has proper length prefix
+            assert!(serialized.len() >= 4, "Serialized data should have at least 4 bytes for length prefix");
+            
+            // Extract length from prefix
+            let expected_length = u32::from_le_bytes([serialized[0], serialized[1], serialized[2], serialized[3]]) as usize;
+            assert_eq!(serialized.len() - 4, expected_length, "Length prefix should match data length");
+            
+            // Deserialize back
+            let (deserialized_msg, remaining) = Message::deserialize(&serialized)
+                .expect("Deserialization should succeed");
+            
+            // Check that no bytes remain
+            assert!(remaining.is_empty(), "No bytes should remain after deserialization");
+            
+            // Compare messages (we need to implement comparison logic)
+            match (&original_msg, &deserialized_msg) {
+                (Message::AudioData(orig), Message::AudioData(deser)) => {
+                    assert_eq!(orig, deser, "AudioData should match");
+                }
+                (Message::Config(orig), Message::Config(deser)) => {
+                    assert_eq!(orig.sample_rate, deser.sample_rate);
+                    assert_eq!(orig.channels, deser.channels);
+                    assert_eq!(orig.sample_format, deser.sample_format);
+                }
+                (Message::Error(orig), Message::Error(deser)) => {
+                    assert_eq!(orig, deser, "Error messages should match");
+                }
+                _ => panic!("Message types should match"),
+            }
+        }
+    }
+
+    #[test]
+    fn test_message_deserialization_insufficient_data() {
+        // Test with less than 4 bytes (no length prefix)
+        let insufficient_data = vec![1, 2, 3];
+        let result = Message::deserialize(&insufficient_data);
+        assert!(result.is_err(), "Should fail with insufficient data for length prefix");
+        
+        // Test with length prefix but insufficient message data
+        let mut partial_data = vec![];
+        partial_data.extend_from_slice(&(10u32).to_le_bytes()); // Claims 10 bytes of data
+        partial_data.extend_from_slice(&[1, 2, 3]); // But only has 3 bytes
+        
+        let result = Message::deserialize(&partial_data);
+        assert!(result.is_err(), "Should fail with insufficient data for complete message");
+    }
+
+    #[test]
+    fn test_message_deserialization_with_remaining_bytes() {
+        let msg = Message::AudioData(vec![1, 2, 3]);
+        let mut serialized = msg.serialize().unwrap();
+        
+        // Add some extra bytes
+        serialized.extend_from_slice(&[99, 100, 101]);
+        
+        let (deserialized, remaining) = Message::deserialize(&serialized)
+            .expect("Deserialization should succeed");
+        
+        assert_eq!(remaining.len(), 3, "Should have 3 remaining bytes");
+        assert_eq!(remaining, &[99, 100, 101], "Remaining bytes should match");
+        
+        // Check the deserialized message
+        if let Message::AudioData(data) = deserialized {
+            assert_eq!(data, vec![1, 2, 3]);
+        } else {
+            panic!("Should deserialize as AudioData");
+        }
+    }
+
+    #[test]
+    fn test_constants() {
+        assert_eq!(DEFAULT_PORT, 8080);
+        assert_eq!(DEFAULT_BUFFER_SIZE, 4096);
+    }
+}
