@@ -1,6 +1,7 @@
 # Strim
 
 Unified audio streaming tool with server and client modes.
+!!!Work in progress!!!
 
 ## Build
 
