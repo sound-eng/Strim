@@ -90,7 +90,10 @@ pub fn start_audio_playback(rx: mpsc::Receiver<Message>, running: Arc<AtomicBool
 fn on_output_data<T: AudioSample>(data: &mut [T], buffer: &Arc<Mutex<Vec<u8>>>) {
     let mut audio_buffer = buffer.lock().unwrap();
     let bytes_needed = data.len() * T::BYTE_SIZE;
-    if audio_buffer.len() < bytes_needed { data.fill(T::default()); return; }
+    if audio_buffer.len() < bytes_needed {
+        data.fill(T::default());
+        return;
+    }
     for (i, sample_bytes) in audio_buffer[..bytes_needed].chunks(T::BYTE_SIZE).enumerate() {
         data[i] = T::from_le_bytes(sample_bytes);
     }
