@@ -1,16 +1,18 @@
 [package]
-name = "strim-client"
+name = "strim"
 version = "0.1.0"
 edition = "2021"
 
 [[bin]]
-name = "strim-client"
+name = "strim"
 path = "src/main.rs"
 
 [dependencies]
-strim-shared = { path = "../strim-shared" }
-cpal = { workspace = true }
 anyhow = { workspace = true }
 clap = { workspace = true }
-tokio = { workspace = true }
 ctrlc = { workspace = true }
+tokio = { workspace = true }
+cpal = { workspace = true }
+ringbuf = { workspace = true }
+strim-shared = { path = "../strim-shared" }
+
