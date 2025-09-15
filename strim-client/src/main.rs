@@ -10,6 +10,8 @@ use std::time::Duration;
 
 use strim_shared::{Message, AudioConfig, SampleFormat as SharedSampleFormat, AudioSample};
 
+mod cli_commands;
+
 // Message types for communication between threads
 #[derive(Debug)]
 enum ConnectionEvent {
@@ -18,45 +20,6 @@ enum ConnectionEvent {
     Shutdown,
 }
 
-mod cli_commands;
-
-/// Attempts to connect to the server with retry logic
-/// Returns Ok(stream) on successful connection, Err on permanent failure
-fn connect_with_retry(host: &str, port: u16, running: Arc<AtomicBool>) -> Result<TcpStream> {
-    let mut attempt = 1;
-    
-    loop {
-        if !running.load(Ordering::SeqCst) {
-            return Err(anyhow::anyhow!("Shutdown requested"));
-        }
-        
-        println!("Connection attempt {} to {}:{}", attempt, host, port);
-        
-        match TcpStream::connect((host, port)) {
-            Ok(stream) => {
-                stream.set_nodelay(true)?;
-                println!("Successfully connected to {}:{}", host, port);
-                return Ok(stream);
-            }
-            Err(e) => {
-                if !running.load(Ordering::SeqCst) {
-                    return Err(anyhow::anyhow!("Shutdown requested"));
-                }
-                
-                println!("Connection attempt {} failed: {}. Retrying in 5 seconds...", attempt, e);
-                attempt += 1;
-                
-                // Sleep for 5 seconds, but check running status every 100ms
-                for _ in 0..50 {
-                    if !running.load(Ordering::SeqCst) {
-                        return Err(anyhow::anyhow!("Shutdown requested"));
-                    }
-                    thread::sleep(Duration::from_millis(100));
-                }
-            }
-        }
-    }
-}
 
 fn main() -> Result<()> {
     let args = cli_commands::Cli::parse();
@@ -217,6 +180,46 @@ fn connection_manager(
     // Connection manager thread exits - no need to send shutdown event
     // The main thread will handle shutdown via Ctrl+C
 }
+
+
+/// Attempts to connect to the server with retry logic
+/// Returns Ok(stream) on successful connection, Err on permanent failure
+fn connect_with_retry(host: &str, port: u16, running: Arc<AtomicBool>) -> Result<TcpStream> {
+    let mut attempt = 1;
+    
+    loop {
+        if !running.load(Ordering::SeqCst) {
+            return Err(anyhow::anyhow!("Shutdown requested"));
+        }
+        
+        println!("Connection attempt {} to {}:{}", attempt, host, port);
+        
+        match TcpStream::connect((host, port)) {
+            Ok(stream) => {
+                stream.set_nodelay(true)?;
+                println!("Successfully connected to {}:{}", host, port);
+                return Ok(stream);
+            }
+            Err(e) => {
+                if !running.load(Ordering::SeqCst) {
+                    return Err(anyhow::anyhow!("Shutdown requested"));
+                }
+                
+                println!("Connection attempt {} failed: {}. Retrying in 5 seconds...", attempt, e);
+                attempt += 1;
+                
+                // Sleep for 5 seconds, but check running status every 100ms
+                for _ in 0..50 {
+                    if !running.load(Ordering::SeqCst) {
+                        return Err(anyhow::anyhow!("Shutdown requested"));
+                    }
+                    thread::sleep(Duration::from_millis(100));
+                }
+            }
+        }
+    }
+}
+
 
 /// Read messages from the network and deserialize them
 /// Sends deserialized messages to the audio playback thread

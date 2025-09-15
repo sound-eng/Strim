@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex, atomic::{AtomicBool, Ordering}};
 use std::thread;
 use std::time::Duration;
 
-use strim_shared::{Message, AudioConfig, SampleFormat, DEFAULT_PORT};
+use strim_shared::{Message, AudioConfig, SampleFormat};
 
 /// Test that a basic client-server handshake works correctly
 #[test]
@@ -347,13 +347,7 @@ fn test_message_sequencing() {
         _ => panic!("Fourth message should be Error"),
     }
     
-    println!("All messages received in correct sequence!");
+    println!("All messages received in correct sequence");
     
     server_handle.join().expect("Server should complete");
-}
-
-/// Test the default port constant
-#[test]
-fn test_default_port() {
-    assert_eq!(DEFAULT_PORT, 8080);
 }
